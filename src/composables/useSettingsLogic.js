@@ -1,9 +1,35 @@
-import { ref, computed } from 'vue';
+import { ref, computed, onUnmounted, getCurrentInstance } from 'vue';
 import { useToastStore } from '../stores/toast.js';
 import { DEFAULT_SETTINGS } from '../constants/default-settings.js';
 import { fetchSettings, saveSettings, resetSettings } from '../lib/api.js';
 import { useBackupLogic } from './useBackupLogic.js';
-import { t } from '../i18n/index.js';
+import { t, setLocale } from '../i18n/index.js';
+import { confirmAction } from './useConfirm.js';
+
+function normalizeExternalApiConfig(value) {
+    const defaults = DEFAULT_SETTINGS.externalApi;
+    const externalApi = value && typeof value === 'object' ? value : {};
+    const tokens = Array.isArray(externalApi.tokens)
+        ? externalApi.tokens
+              .map((item, index) => ({
+                  name: String(item?.name || `token-${index + 1}`).trim() || `token-${index + 1}`,
+                  token: String(item?.token || '').trim(),
+              }))
+              .filter((item) => item.token || item.name)
+        : [];
+
+    return {
+        ...defaults,
+        ...externalApi,
+        tokens: tokens.length > 0 ? tokens : defaults.tokens.map((item) => ({ ...item })),
+    };
+}
+
+function normalizeSettingsObject(source = {}) {
+    const merged = { ...DEFAULT_SETTINGS, ...source };
+    merged.externalApi = normalizeExternalApiConfig(source.externalApi ?? merged.externalApi);
+    return merged;
+}
 
 /**
  * 设置页面的核心逻辑 composable
@@ -16,22 +42,41 @@ export function useSettingsLogic() {
     const { exportBackup, importBackup } = useBackupLogic();
 
     // ========== 状态定义 ==========
-    const settings = ref({ ...DEFAULT_SETTINGS });
+    const settings = ref(normalizeSettingsObject(DEFAULT_SETTINGS));
     const isLoading = ref(false);
     const isSaving = ref(false);
     const showMigrationModal = ref(false);
+    const restartCountdown = ref(null);
+    let reloadTimer = null;
+
+    const clearReloadTimer = () => {
+        if (reloadTimer !== null) {
+            clearInterval(reloadTimer);
+            reloadTimer = null;
+        }
+    };
+
+    if (getCurrentInstance()) {
+        onUnmounted(clearReloadTimer);
+    }
 
     // 嵌套配置对象
     const disguiseConfig = ref({
         enabled: false,
         pageType: 'default',
-        redirectUrl: ''
+        redirectUrl: '',
     });
-
 
     // ========== 计算属性 ==========
     const hasWhitespace = computed(() => {
-        const fieldsCheck = ['FileName', 'mytoken', 'profileToken', 'transformConfig', 'BotToken', 'ChatID'];
+        const fieldsCheck = [
+            'FileName',
+            'mytoken',
+            'profileToken',
+            'transformConfig',
+            'BotToken',
+            'ChatID',
+        ];
         for (const key of fieldsCheck) {
             if (settings.value[key] && /\s/.test(settings.value[key])) return true;
         }
@@ -51,29 +96,31 @@ export function useSettingsLogic() {
             const result = await fetchSettings();
             if (result.success) {
                 const incoming = result.data && typeof result.data === 'object' ? result.data : {};
-                settings.value = { ...DEFAULT_SETTINGS, ...incoming };
+                settings.value = normalizeSettingsObject(incoming);
 
-                // 初始化前缀配置
-                // 初始化伪装配置
                 if (settings.value.disguise) {
                     disguiseConfig.value = {
                         enabled: settings.value.disguise.enabled ?? false,
                         pageType: settings.value.disguise.pageType ?? 'default',
-                        redirectUrl: settings.value.disguise.redirectUrl ?? ''
+                        redirectUrl: settings.value.disguise.redirectUrl ?? '',
                     };
                 }
 
-                // 确保 storageType 有默认值
                 if (!settings.value.storageType) {
                     settings.value.storageType = 'kv';
                 }
+
+                // 应用默认显示语言设置
+                if (settings.value.defaultLocale) {
+                    setLocale(settings.value.defaultLocale);
+                }
             } else {
                 showToast(t('settings.loadFailedWithMessage', { message: result.error }), 'error');
-                settings.value = { ...DEFAULT_SETTINGS };
+                settings.value = normalizeSettingsObject(DEFAULT_SETTINGS);
             }
         } catch (error) {
             showToast(t('settings.loadFailed'), 'error');
-            settings.value = { ...DEFAULT_SETTINGS };
+            settings.value = normalizeSettingsObject(DEFAULT_SETTINGS);
         } finally {
             isLoading.value = false;
         }
@@ -95,13 +142,16 @@ export function useSettingsLogic() {
         isSaving.value = true;
         try {
             if (!settings.value.storageType) settings.value.storageType = 'kv';
+            settings.value.externalApi = normalizeExternalApiConfig(settings.value.externalApi);
 
             const settingsToSave = {
                 ...settings.value,
-                disguise: disguiseConfig.value
+                externalApi: normalizeExternalApiConfig(settings.value.externalApi),
+                disguise: disguiseConfig.value,
             };
 
-            settingsToSave.ruleLevel = settingsToSave.ruleLevel || settingsToSave.clashRuleLevel || 'std';
+            settingsToSave.ruleLevel =
+                settingsToSave.ruleLevel || settingsToSave.clashRuleLevel || 'std';
 
             delete settingsToSave.prefixConfig;
             delete settingsToSave.prependSubName;
@@ -111,7 +161,15 @@ export function useSettingsLogic() {
             const result = await saveSettings(settingsToSave);
             if (result.success) {
                 showToast(t('settings.savedReloading'), 'success');
-                setTimeout(() => window.location.reload(), 1500);
+                clearReloadTimer();
+                restartCountdown.value = 3;
+                reloadTimer = setInterval(() => {
+                    restartCountdown.value -= 1;
+                    if (restartCountdown.value <= 0) {
+                        clearReloadTimer();
+                        window.location.reload();
+                    }
+                }, 1000);
                 return true;
             } else {
                 throw new Error(result.error || t('settings.saveFailed'));
@@ -137,11 +195,19 @@ export function useSettingsLogic() {
      * 处理恢复出厂设置
      */
     const handleReset = async () => {
-        if (!confirm(t('settings.resetConfirm'))) {
+        const firstConfirmed = await confirmAction({
+            message: t('settings.resetConfirm'),
+            variant: 'danger',
+        });
+        if (!firstConfirmed) {
             return;
         }
-        
-        if (!confirm(t('settings.resetConfirmAgain'))) {
+
+        const secondConfirmed = await confirmAction({
+            message: t('settings.resetConfirmAgain'),
+            variant: 'danger',
+        });
+        if (!secondConfirmed) {
             return;
         }
 
@@ -161,20 +227,15 @@ export function useSettingsLogic() {
         }
     };
 
-    // 备份函数由 useBackupLogic 提供
-
-    // ========== 返回值 ==========
     return {
-        // 状态
         settings,
         disguiseConfig,
         isLoading,
         isSaving,
         showMigrationModal,
-        // 计算属性
+        restartCountdown,
         hasWhitespace,
         isStorageTypeValid,
-        // 函数
         loadSettings,
         handleSave,
         handleMigrationSuccess,

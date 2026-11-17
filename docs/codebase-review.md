@@ -11,12 +11,12 @@
 
 ## 代码规模
 
-| 区域 | 文件数 | 行数 | 说明 |
-| --- | ---: | ---: | --- |
-| `src` | 207 | 30,752 | Vue 前端、状态管理、组件、协议工具 |
-| `functions` | 90 | 26,476 | Cloudflare Pages Functions 后端 |
-| `tests` | 73 | 8,368 | Vitest 单元/回归测试 |
-| `docs` | 13 | 2,642 | 架构、数据模型与运维文档 |
+| 区域        | 文件数 |   行数 | 说明                               |
+| ----------- | -----: | -----: | ---------------------------------- |
+| `src`       |    207 | 30,752 | Vue 前端、状态管理、组件、协议工具 |
+| `functions` |     90 | 26,476 | Cloudflare Pages Functions 后端    |
+| `tests`     |     73 |  8,368 | Vitest 单元/回归测试               |
+| `docs`      |     13 |  2,642 | 架构、数据模型与运维文档           |
 
 主要源码语言：JavaScript 与 Vue 单文件组件。
 
@@ -55,7 +55,7 @@
 
 ### 安全与公开接口
 
-- `functions/modules/auth-middleware.js`：HMAC cookie 登录会话、七天有效期、auth diagnostic 开关。
+- `functions/modules/auth-middleware.js`：HMAC cookie 登录会话、30 天闲置过期与 7 天活动续期、auth diagnostic 开关。
 - `functions/middleware/cors.js`：CORS、CSRF origin/referrer、安全响应头。
 - `functions/modules/security-utils.js`：敏感字段脱敏、公开 fetch SSRF 防护、redirect 重新校验。
 - 公开接口包括 public profiles/preview/guestbook/error report/Telegram webhook/GitHub release proxy，需要持续关注体积限制和滥用风险。
@@ -102,10 +102,10 @@
 
 - 覆盖率命令存在但缺少 `@vitest/coverage-v8`，当前不可作为 CI 强制项。
 - 剩余 stdout 噪音主要来自：
-  - `misub-request-regression.test.js` 的 MiSub request 日志。
-  - `api-handler-storage-helpers.test.js` 的 diff/cache clear 日志。
-  - `notifications-cron-storage.test.js` 的 cron start/completed 日志。
-  - `node-handler-batch-update.test.js` 的 storage auto-detect 日志。
+    - `misub-request-regression.test.js` 的 MiSub request 日志。
+    - `api-handler-storage-helpers.test.js` 的 diff/cache clear 日志。
+    - `notifications-cron-storage.test.js` 的 cron start/completed 日志。
+    - `node-handler-batch-update.test.js` 的 storage auto-detect 日志。
 - 时间、fetch、DOM、dynamic import 是主要 flaky 风险来源。
 
 ## 最大复杂热点
